@@ -1,0 +1,83 @@
+/* "Play liked" button — styled to blend with YouTube Music's dark header pills
+   (Shuffle / Radio). Uses translucent, currentColor-based styling so it adapts
+   to the header background rather than hard-coding a theme color. */
+
+.ytml-play-liked-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 20px;
+  margin-left: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 20px;
+  background: transparent;
+  color: #fff;
+  font-family: "YouTube Sans", "Roboto", sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.007px;
+  white-space: nowrap;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: background-color 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
+}
+
+.ytml-play-liked-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.ytml-play-liked-btn:active {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.ytml-play-liked-btn:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.6);
+  outline-offset: 2px;
+}
+
+.ytml-play-liked-btn svg {
+  flex: 0 0 auto;
+}
+
+.ytml-play-liked-btn.ytml-busy {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.ytml-play-liked-btn.ytml-busy svg {
+  animation: ytml-spin 0.9s linear infinite;
+}
+
+@keyframes ytml-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Transient status message (e.g. "No liked songs found"). */
+#ytml-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 96px;
+  transform: translateX(-50%) translateY(12px);
+  z-index: 99999;
+  max-width: 80vw;
+  padding: 12px 20px;
+  border-radius: 8px;
+  background: #282828;
+  color: #fff;
+  font-family: "Roboto", sans-serif;
+  font-size: 14px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+#ytml-toast.ytml-toast-visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
