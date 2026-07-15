@@ -54,9 +54,21 @@
   // --------------------------------------------------------------------------
   // Artist pages use either /channel/UC… or /@handle URLs; both render an
   // immersive header. The header is the real signal that we're on an artist page.
+
+  // YT Music caches previous pages in the DOM (hidden) during SPA navigation, so
+  // more than one header can exist at once. Always target the *visible* one.
+  function visibleHeader() {
+    const headers = document.querySelectorAll(HEADER_SELECTORS);
+    for (const h of headers) {
+      const r = h.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) return h;
+    }
+    return headers[0] || null;
+  }
+
   function getArtist() {
     if (!ARTIST_URL.test(location.pathname)) return null;
-    const header = document.querySelector(HEADER_SELECTORS);
+    const header = visibleHeader();
     if (!header) return null; // not a rendered artist page (yet)
     const name = getArtistName(header);
     if (!name) return null;
@@ -154,10 +166,17 @@
   function ensureButton(allowFallback) {
     const artist = getArtist();
     if (!artist) return false;
-    if (document.getElementById(BTN_ID)) return true;
+    // Already injected into *this* (visible) header? Done. Checking the header
+    // rather than a global getElementById avoids being fooled by a stale button
+    // left in a hidden, cached previous page.
+    if (artist.header.querySelector("#" + BTN_ID)) return true;
     const row =
       findActionRow(artist.header) || (allowFallback ? fallbackRow(artist.header) : null);
     if (!row) return false;
+    // Drop any stragglers from previous pages so the id stays unique.
+    document
+      .querySelectorAll("#" + BTN_ID)
+      .forEach((b) => { if (!artist.header.contains(b)) b.remove(); });
     row.appendChild(makeButton());
     console.log(TAG, "button injected for", artist.name, "into", row.tagName.toLowerCase());
     return true;
@@ -183,10 +202,36 @@
     }, 400);
   }
 
-  // YouTube Music is a SPA; this event fires on every in-app navigation.
-  document.addEventListener("yt-navigate-finish", scheduleEnsure, true);
-  window.addEventListener("yt-page-data-updated", scheduleEnsure, true);
+  // YouTube Music is a SPA, and which navigation event fires depends on the
+  // build — `yt-navigate-finish`/`yt-page-data-updated` have stopped firing on
+  // current builds, where a nav instead looks like `yt-navigate` →
+  // `yt-rendererstamper-finished`. So don't depend on any single event name:
+  //   (a) listen to a broad set of yt lifecycle events (harmless if absent), and
+  //   (b) poll for URL changes as a name-independent safety net.
+  // Every trigger just (re)starts scheduleEnsure(), whose retry loop then waits
+  // for the new header to render. Without this, in-app navigation to an artist
+  // page leaves the button un-injected even though the URL changes.
+  const NAV_EVENTS = [
+    "yt-navigate-finish",
+    "yt-page-data-updated",
+    "yt-navigate",
+    "yt-rendererstamper-finished",
+    "yt-page-type-changed"
+  ];
+  for (const ev of NAV_EVENTS) {
+    document.addEventListener(ev, scheduleEnsure, true);
+    window.addEventListener(ev, scheduleEnsure, true);
+  }
   window.addEventListener("load", scheduleEnsure);
+
+  let lastHref = location.href;
+  setInterval(() => {
+    if (location.href !== lastHref) {
+      lastHref = location.href;
+      scheduleEnsure();
+    }
+  }, 700);
+
   scheduleEnsure();
 
   // --------------------------------------------------------------------------

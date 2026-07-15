@@ -21,9 +21,12 @@ not of Chrome extension mechanics:
 
 - **YT Music is a single-page app.** Navigating between pages does not reload the
   document, so a content script that only runs on `document_idle` will fire once
-  and never again. Detect in-app navigation (e.g. observe `yt-navigate-finish`
-  events or watch URL changes) and re-evaluate whether the current page is an
-  artist page each time, re-injecting the button as needed.
+  and never again. Detect in-app navigation and re-evaluate whether the current
+  page is an artist page each time, re-injecting the button as needed. **Do not
+  rely on a single nav event name**: `yt-navigate-finish`/`yt-page-data-updated`
+  have stopped firing on current builds (a nav now looks like `yt-navigate` →
+  `yt-rendererstamper-finished`). content.js listens to a broad set of yt events
+  *and* polls `location.href` for changes as a name-independent safety net.
 - **The DOM is Polymer/custom-elements and heavily virtualized.** Class names are
   unstable and lists render lazily as you scroll. Prefer anchoring to stable
   structural landmarks and `aria`/role attributes over generated class names, and
@@ -44,8 +47,9 @@ Three scripts, split by the boundary that actually matters — which world/origi
 can do what:
 
 - **`src/content.js`** (ISOLATED world) — owns button injection + lifecycle
-  (detect artist page, inject on `yt-navigate-finish`, retry while the header
-  renders) and orchestrates the click: fetch Liked Music via InnerTube, filter
+  (detect artist page, re-inject on any SPA navigation via broad yt-events + a
+  URL-change poll, retry while the header renders) and orchestrates the click:
+  fetch Liked Music via InnerTube, filter
   to this artist, shuffle, then hand off. Can do same-origin authenticated
   `fetch` but cannot see page JS globals.
 - **`src/main-world.js`** (MAIN world) — its only reason to exist is that the
@@ -97,6 +101,9 @@ Data flow on click: `content.js` → (config from `main-world.js`) → InnerTube
 ## Fragile spots (check these first when something breaks)
 
 - **Button placement** — `findActionRow()` anchors to the header play button.
+- **SPA re-injection** — if the button appears on a hard load but not after
+  in-app navigation, YT changed its nav events again: check which fire (the
+  `NAV_EVENTS` list in content.js) and lean on the `location.href` poller.
 - **Playback** — depends on YT Music accepting a `watch_videos` temp playlist.
 - **Auth** — HTTP 401/403 on liked fetch ⇒ `buildAuthHeader()` / cookie names.
 
