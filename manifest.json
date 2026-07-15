@@ -3,7 +3,7 @@
   "name": "Liked & Loaded — Play liked by artist (for YouTube Music)",
   "short_name": "Liked & Loaded",
   "version": "0.4.0",
-  "description": "Shuffle-play the songs you've liked on YouTube Music by one artist (a button on the artist page) or several at once (an artist picker next to the search bar).",
+  "description": "Shuffle-play songs you liked by artist (a button on the artist page) or several at once (an artist picker next to the search bar).",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
