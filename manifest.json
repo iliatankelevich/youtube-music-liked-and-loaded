@@ -3,6 +3,12 @@
   "name": "YouTube Music — Play Liked by Artist",
   "version": "0.3.1",
   "description": "Adds a \"Play liked\" button to YouTube Music artist pages that shuffle-plays the songs you've liked by that artist.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "permissions": ["storage"],
   "host_permissions": [
     "https://music.youtube.com/*",
