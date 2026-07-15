@@ -80,19 +80,17 @@ This extension shuffle-plays the user's liked YouTube Music songs, filtered to o
 
 **Permission justifications**
 
-- `storage`
+The dashboard shows one box per manifest permission, plus a single combined box
+for all host permissions. Paste these:
+
+- `storage` justification
 ```
 Caches the user's liked-songs list in local browser storage (chrome.storage.local) so the feature responds instantly and doesn't re-fetch the whole list on every use. Nothing is stored remotely.
 ```
 
-- Host permission `https://music.youtube.com/*`
+- **Host permission justification** (one combined box for music.youtube.com + www.youtube.com)
 ```
-This is where the extension runs. It injects the "Play liked" button and the artist picker, and reads the user's liked songs via YouTube Music's own InnerTube API using the session the user is already signed in to.
-```
-
-- Host permission `https://www.youtube.com/*`
-```
-Used solely to create a temporary playlist via youtube.com/watch_videos from the chosen songs — this is the mechanism that actually starts shuffled playback. No browsing data is read from youtube.com.
+Liked & Loaded runs only on YouTube Music. Access to music.youtube.com is required because that is where the extension operates: it injects the "Play liked" button and the artist picker, and reads the user's own liked songs through YouTube Music's internal API, authenticated with the session the user is already signed in to. Access to www.youtube.com is required only to create a temporary playlist via youtube.com/watch_videos from the songs the user selected — this is what actually starts shuffled playback. The extension makes no other use of these sites and does not collect, store remotely, or transmit any browsing data or personal information.
 ```
 
 **Data collection disclosure** (the dashboard checklist)
