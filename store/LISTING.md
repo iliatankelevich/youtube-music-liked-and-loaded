@@ -10,7 +10,7 @@ by the dashboard tab they appear under.
 **Item name** (max 75 chars)
 
 ```
-YouTube Music — Play Liked by Artist
+Liked & Loaded — Play liked by artist (for YouTube Music)
 ```
 
 **Summary** (short description, max 132 chars)

@@ -2,7 +2,9 @@
   <img src="liked_n_loaded_logo.png" alt="Liked & Loaded" width="120">
 </p>
 
-<h1 align="center">YouTube Music — Play Liked by Artist</h1>
+<h1 align="center">Liked &amp; Loaded</h1>
+
+<p align="center"><strong>Play liked by artist — for YouTube Music</strong></p>
 
 <p align="center">
   Shuffle-play the songs <em>you've</em> liked on
