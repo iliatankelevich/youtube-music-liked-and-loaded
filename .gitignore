@@ -8,3 +8,7 @@
 
 # Logs / scratch
 *.log
+
+# Build output (store package)
+dist/
+*.zip
