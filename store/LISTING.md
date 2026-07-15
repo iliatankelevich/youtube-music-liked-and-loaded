@@ -120,7 +120,7 @@ https://github.com/iliatankelevich/youtube-music-liked-and-loaded/blob/main/PRIV
 - **Screenshots** (need 1–5; 1280×800): `store/screenshots/01-artist-page.png`,
   `store/screenshots/02-autocomplete.png`.
 - **Small promo tile** (440×280): `store/promo-tile-440x280.png` — ready to upload.
-- **Marquee promo tile** (1400×560): optional; not included (can be added later).
+- **Marquee promo tile** (1400×560): `store/promo-marquee-1400x560.png` — ready to upload.
 
 ---
 
