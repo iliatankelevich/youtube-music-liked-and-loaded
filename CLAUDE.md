@@ -4,9 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project goal
 
-A Chrome extension for **YouTube Music** (`music.youtube.com`) that injects a
-**"Play liked"** button onto an artist's page. Pressing it starts a **shuffled**
-queue containing only the songs the user has liked from that artist.
+A Chrome extension for **YouTube Music** (`music.youtube.com`) that shuffle-plays
+the songs the user has liked, filtered to chosen artists. Two entry points:
+
+- **"Play liked" button** injected onto an artist's page → the songs liked from
+  *that* artist.
+- **Artist multi-select bar** injected next to the global search box (present on
+  every page) → type/pick several artists as chips, press play, and get the
+  **union** of your liked songs by all of them. The selection resets on play.
+
+Both start a **shuffled** queue and share the same fetch/filter/play machinery.
 
 ## Current status
 
@@ -46,12 +53,14 @@ not of Chrome extension mechanics:
 Three scripts, split by the boundary that actually matters — which world/origin
 can do what:
 
-- **`src/content.js`** (ISOLATED world) — owns button injection + lifecycle
-  (detect artist page, re-inject on any SPA navigation via broad yt-events + a
-  URL-change poll, retry while the header renders) and orchestrates the click:
-  fetch Liked Music via InnerTube, filter
-  to this artist, shuffle, then hand off. Can do same-origin authenticated
-  `fetch` but cannot see page JS globals.
+- **`src/content.js`** (ISOLATED world) — owns injection + lifecycle for **both**
+  entry points (the artist-page button and the search-box artist bar), re-injected
+  on any SPA navigation via broad yt-events + a URL-change poll, retrying while the
+  DOM renders. Orchestrates play: fetch Liked Music via InnerTube, filter, shuffle,
+  then hand off. `onClick()` (button) and `onArtistBarPlay()` (bar) share the
+  extracted `getLikedSongs()` (cache-or-fetch) and `playShuffled()` (temp playlist
+  + navigate) helpers and the same `filterByArtist()` predicate. Can do same-origin
+  authenticated `fetch` but cannot see page JS globals.
 - **`src/main-world.js`** (MAIN world) — its only reason to exist is that the
   ISOLATED script can't read the page's `ytcfg` (InnerTube API key + client
   context). It reads those and relays them over `postMessage`.
@@ -97,13 +106,30 @@ Data flow on click: `content.js` → (config from `main-world.js`) → InnerTube
   that was the original "0 liked songs" bug.
 - **Shuffle** happens client-side *before* the temp playlist is built, so plain
   in-order playback of that playlist is already randomized.
+- **Artist bar autocomplete is local, not a search API.** `buildArtistIndex()`
+  folds the cached liked list into artist groups `{ids, names, display, count}`,
+  keyed by channel id but **merged on normalized name** (so "Korol i Shut" and
+  "Король и Шут" collapse into one pickable entry, and typing either script finds
+  it). Suggestions come only from artists you've actually liked — every pick is
+  therefore guaranteed to have songs, and each chip already carries the exact
+  ids+names the songs use, so play just unions the selected groups into one
+  identity and reuses `filterByArtist()` — **no per-pick `resolveArtistIdentity()`
+  round-trip.** This relies on `parseSong()` also emitting paired `artists:[{id,
+  name}]` (the flat `artistIds`/`artistNames` lose the pairing on collaborations).
+  The union temp playlist is still capped at `MAX_VIDEOS` (50) in background.js —
+  a `watch_videos` limit — so many-artist selections play a random 50 of the union.
 
 ## Fragile spots (check these first when something breaks)
 
 - **Button placement** — `findActionRow()` anchors to the header play button.
-- **SPA re-injection** — if the button appears on a hard load but not after
-  in-app navigation, YT changed its nav events again: check which fire (the
-  `NAV_EVENTS` list in content.js) and lean on the `location.href` poller.
+- **Artist-bar placement** — `findSearchBox()` anchors to `ytmusic-search-box`
+  (falling back to the search `input`); the bar is inserted as its next sibling.
+  Its dropdown is `position:fixed`, placed by `positionSuggest()` from the bar's
+  rect, so nav-bar overflow can't clip it.
+- **SPA re-injection** — if either UI appears on a hard load but not after in-app
+  navigation, YT changed its nav events again: check which fire (the `NAV_EVENTS`
+  list in content.js) and lean on the `location.href` poller. `onNav()` drives
+  both `scheduleEnsure()` (button) and `scheduleEnsureBar()` (bar).
 - **Playback** — depends on YT Music accepting a `watch_videos` temp playlist.
 - **Auth** — HTTP 401/403 on liked fetch ⇒ `buildAuthHeader()` / cookie names.
 
@@ -113,5 +139,7 @@ Console logs are prefixed `[YTML]`.
 
 No build step. Load unpacked at `chrome://extensions` (Developer mode →
 "Load unpacked" → this directory). After edits, click the extension's reload
-icon, then reload the `music.youtube.com` tab. If a bundler/linter/tests get
-added later, document the actual commands (incl. single-test) here.
+icon, then reload the `music.youtube.com` tab. **A page reload alone is not
+enough** — Chrome serves the *cached* content script until the extension itself
+is reloaded (or the browser is relaunched). If a bundler/linter/tests get added
+later, document the actual commands (incl. single-test) here.

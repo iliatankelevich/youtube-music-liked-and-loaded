@@ -15,10 +15,10 @@
     "ytmusic-immersive-header-renderer, ytmusic-visual-header-renderer, ytmusic-header-renderer";
   const ARTIST_URL = /^\/(channel\/UC[\w-]+|@[\w.-]+)/;
 
-  const SHUFFLE_ICON =
-    '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">' +
-    '<path fill="currentColor" d="M10.59 9.17 5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/>' +
-    "</svg>";
+  // The extension's own logo mark (heart + shuffle) — a white-on-transparent
+  // glyph shown in the button, matching YT Music's white header pills. It's a
+  // web_accessible_resource so it loads on the page despite YT Music's CSP.
+  const MARK_URL = chrome.runtime.getURL("icons/mark.png");
 
   // --------------------------------------------------------------------------
   // Config bridge (values come from main-world.js via postMessage)
@@ -158,7 +158,18 @@
     btn.type = "button";
     btn.setAttribute("aria-label", "Shuffle-play songs you liked by this artist");
     btn.setAttribute("title", "Shuffle-play songs you liked by this artist");
-    btn.innerHTML = SHUFFLE_ICON + '<span class="ytml-label">Play liked</span>';
+
+    const icon = document.createElement("img");
+    icon.className = "ytml-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.alt = "";
+    icon.src = MARK_URL;
+
+    const label = document.createElement("span");
+    label.className = "ytml-label";
+    label.textContent = "Play liked";
+
+    btn.append(icon, label);
     btn.addEventListener("click", onClick);
     return btn;
   }
@@ -202,6 +213,31 @@
     }, 400);
   }
 
+  // The artist bar lives in the global nav bar (present on every page), so it is
+  // injected once and generally persists. Still run the same resilient pattern
+  // as the header button — a short retry loop per nav — so it re-adds itself if
+  // YT ever re-renders the nav bar, and so the first injection waits for the nav
+  // bar to render on a hard load.
+  let barTimer = null;
+  function scheduleEnsureBar() {
+    if (barTimer) clearInterval(barTimer);
+    let ticks = 0;
+    barTimer = setInterval(() => {
+      ticks += 1;
+      if (ensureArtistBar() || ticks > 30) {
+        clearInterval(barTimer);
+        barTimer = null;
+      }
+    }, 400);
+  }
+
+  // Single entry point for every navigation trigger: (re)inject the header
+  // button (artist pages only) and the artist bar (all pages).
+  function onNav() {
+    scheduleEnsure();
+    scheduleEnsureBar();
+  }
+
   // YouTube Music is a SPA, and which navigation event fires depends on the
   // build — `yt-navigate-finish`/`yt-page-data-updated` have stopped firing on
   // current builds, where a nav instead looks like `yt-navigate` →
@@ -219,20 +255,20 @@
     "yt-page-type-changed"
   ];
   for (const ev of NAV_EVENTS) {
-    document.addEventListener(ev, scheduleEnsure, true);
-    window.addEventListener(ev, scheduleEnsure, true);
+    document.addEventListener(ev, onNav, true);
+    window.addEventListener(ev, onNav, true);
   }
-  window.addEventListener("load", scheduleEnsure);
+  window.addEventListener("load", onNav);
 
   let lastHref = location.href;
   setInterval(() => {
     if (location.href !== lastHref) {
       lastHref = location.href;
-      scheduleEnsure();
+      onNav();
     }
   }, 700);
 
-  scheduleEnsure();
+  onNav();
 
   // --------------------------------------------------------------------------
   // Click handler / orchestration
@@ -252,16 +288,7 @@
       // Resolve who this artist is (channel ids + name variants) while the liked
       // list loads — the two are independent, so overlap them.
       const identityP = resolveArtistIdentity(cfg, artist);
-
-      // Use the cached liked list for an instant response when possible, and
-      // refresh it in the background so the next click is up to date.
-      let all = await getCachedSongs();
-      if (all) {
-        refreshCacheInBackground(cfg);
-      } else {
-        all = await fetchAllLiked(cfg);
-        saveCache(all);
-      }
+      const all = await getLikedSongs(cfg);
 
       const identity = await identityP;
       const matches = filterByArtist(all, identity);
@@ -279,14 +306,7 @@
         return;
       }
 
-      shuffle(matches);
-      const videoIds = matches.map((s) => s.videoId);
-      // The temp playlist becomes the Up Next queue: the first song plays and
-      // the rest follow, already shuffled.
-      const listId = await createTempPlaylist(videoIds);
-      location.href =
-        `https://music.youtube.com/watch?v=${encodeURIComponent(videoIds[0])}` +
-        `&list=${encodeURIComponent(listId)}`;
+      await playShuffled(matches);
     } catch (err) {
       console.error(TAG, err);
       toast(`Couldn't start playback: ${err.message}`);
@@ -296,6 +316,32 @@
     }
   }
 
+  // Cache-hit-or-fetch the full liked list, kicking off a background refresh on
+  // a hit so the next use is current. Shared by the header button and the
+  // artist bar.
+  async function getLikedSongs(cfg) {
+    const cached = await getCachedSongs();
+    if (cached) {
+      refreshCacheInBackground(cfg);
+      return cached;
+    }
+    const all = await fetchAllLiked(cfg);
+    saveCache(all);
+    return all;
+  }
+
+  // Shuffle the given songs, mint a temp playlist from their video ids, and
+  // navigate to it — the temp playlist becomes the Up Next queue (first song
+  // plays, the rest follow, already shuffled). Shared by both entry points.
+  async function playShuffled(songs) {
+    shuffle(songs);
+    const videoIds = songs.map((s) => s.videoId).filter(Boolean);
+    const listId = await createTempPlaylist(videoIds);
+    location.href =
+      `https://music.youtube.com/watch?v=${encodeURIComponent(videoIds[0])}` +
+      `&list=${encodeURIComponent(listId)}`;
+  }
+
   function filterByArtist(songs, identity) {
     return songs.filter(
       (s) =>
@@ -303,6 +349,70 @@
         (s.artistIds.some((id) => identity.channelIds.has(id)) ||
           s.artistNames.some((n) => identity.names.has(norm(n))))
     );
+  }
+
+  // Group the liked list into distinct artists for the multi-select bar's
+  // autocomplete. Each group is an identity-like { ids, names } plus a display
+  // name and song count. Keyed by channel id but merged on normalized name, so
+  // the same artist collapses to one entry (and a name later seen with a new id
+  // folds into the existing group). Tolerates legacy cache entries that predate
+  // parseSong's `artists` pairs by zipping artistNames/artistIds.
+  function buildArtistIndex(songs) {
+    const byId = new Map(); // channel id -> group
+    const byName = new Map(); // normalized name -> group
+    const groups = [];
+
+    for (const song of songs) {
+      if (!song.videoId) continue;
+      for (const { id, name } of artistPairs(song)) {
+        const nm = name ? norm(name) : "";
+        if (!id && !nm) continue;
+        let group = (id && byId.get(id)) || (nm && byName.get(nm)) || null;
+        if (!group) {
+          group = {
+            ids: new Set(),
+            names: new Set(),
+            display: name || id || "",
+            hasName: !!name,
+            count: 0,
+            songIds: new Set()
+          };
+          groups.push(group);
+        }
+        if (id) {
+          group.ids.add(id);
+          byId.set(id, group);
+        }
+        if (nm) {
+          group.names.add(nm);
+          byName.set(nm, group);
+        }
+        if (name && !group.hasName) {
+          group.display = name;
+          group.hasName = true;
+        }
+        if (!group.songIds.has(song.videoId)) {
+          group.songIds.add(song.videoId);
+          group.count += 1;
+        }
+      }
+    }
+
+    groups.sort((a, b) => b.count - a.count || a.display.localeCompare(b.display));
+    return groups;
+  }
+
+  // The song's artists as {id, name} pairs, falling back to zipping the flat
+  // arrays for cache entries written before parseSong emitted `artists`.
+  function artistPairs(song) {
+    if (Array.isArray(song.artists) && song.artists.length) return song.artists;
+    const names = song.artistNames || [];
+    const ids = song.artistIds || [];
+    const out = [];
+    for (let i = 0; i < Math.max(names.length, ids.length); i += 1) {
+      out.push({ id: ids[i] || null, name: names[i] || null });
+    }
+    return out;
   }
 
   // Build the set of channel ids + names that identify *this* artist, so we can
@@ -509,6 +619,10 @@
       (renderer.playlistItemData && renderer.playlistItemData.videoId) || null;
     const artistIds = [];
     const artistNames = [];
+    // id+name kept paired per artist so a song's artists can be grouped
+    // correctly downstream (buildArtistIndex): the flat artistIds/artistNames
+    // arrays lose the pairing on collaborations (song by A & B).
+    const artists = [];
 
     for (const col of renderer.flexColumns || []) {
       const flex = col.musicResponsiveListItemFlexColumnRenderer;
@@ -520,6 +634,7 @@
         if (be && typeof be.browseId === "string" && be.browseId.startsWith("UC")) {
           artistIds.push(be.browseId);
           if (run.text) artistNames.push(run.text);
+          artists.push({ id: be.browseId, name: run.text || null });
         }
       }
     }
@@ -531,7 +646,7 @@
         }
       });
     }
-    return { videoId, artistIds, artistNames };
+    return { videoId, artistIds, artistNames, artists };
   }
 
   function extractContinuation(root) {
@@ -576,6 +691,367 @@
       );
     });
   }
+
+  // --------------------------------------------------------------------------
+  // Artist multi-select bar (global; lives next to the search box)
+  // --------------------------------------------------------------------------
+  // A second, always-available entry point: type artist names, add several as
+  // chips, then shuffle-play the union of your liked songs by all of them.
+  // Suggestions are drawn only from artists that appear in your liked list
+  // (built from the same cache the header button uses) — so every pick has
+  // songs, and each carries the channel ids + name it uses in *your likes*,
+  // which is exactly what filterByArtist() needs (no per-pick identity resolve).
+  const ARTIST_BAR_ID = "ytml-artist-bar";
+  const MAX_SUGGEST = 8;
+  const selected = []; // artist groups currently chosen (shown as chips)
+  let artistIndex = null; // Array<group> built lazily from the liked list
+  let artistIndexPromise = null; // in-flight load, so we build it at most once
+  let activeSuggest = -1; // highlighted suggestion for keyboard nav; -1 = none
+
+  // The global search box; the bar is injected as its next sibling. Anchor to
+  // the custom element, falling back to climbing from the search input.
+  function findSearchBox() {
+    const box = document.querySelector("ytmusic-search-box");
+    if (box) return box;
+    const input = document.querySelector(
+      'ytmusic-search-box input, input[role="combobox"], input[aria-label*="search" i]'
+    );
+    return input ? input.closest("ytmusic-search-box") || input.parentElement : null;
+  }
+
+  function ensureArtistBar() {
+    if (document.getElementById(ARTIST_BAR_ID)) return true;
+    const anchor = findSearchBox();
+    if (!anchor || !anchor.parentElement) return false;
+    anchor.insertAdjacentElement("afterend", buildArtistBar());
+    console.log(TAG, "artist bar injected next to search box");
+    return true;
+  }
+
+  // Resolve the bar's children on demand instead of holding refs, so it keeps
+  // working if the bar is ever torn down and re-injected.
+  function barEls() {
+    const bar = document.getElementById(ARTIST_BAR_ID);
+    if (!bar) return null;
+    return {
+      bar,
+      chips: bar.querySelector(".ytml-chips"),
+      input: bar.querySelector(".ytml-artist-input"),
+      play: bar.querySelector(".ytml-artist-play"),
+      suggest: bar.querySelector(".ytml-suggest")
+    };
+  }
+
+  function buildArtistBar() {
+    const bar = document.createElement("div");
+    bar.id = ARTIST_BAR_ID;
+    bar.className = "ytml-artist-bar";
+
+    const chips = document.createElement("div");
+    chips.className = "ytml-chips";
+
+    const input = document.createElement("input");
+    input.className = "ytml-artist-input";
+    input.type = "text";
+    input.placeholder = "Play liked by artist…";
+    input.setAttribute("aria-label", "Add an artist to shuffle-play your liked songs");
+    input.setAttribute("autocomplete", "off");
+    input.spellcheck = false;
+
+    const play = document.createElement("button");
+    play.type = "button";
+    play.className = "ytml-artist-play";
+    play.setAttribute("aria-label", "Shuffle-play liked songs by the selected artists");
+    play.setAttribute("title", "Shuffle-play liked songs by the selected artists");
+    play.disabled = true;
+    const icon = document.createElement("img");
+    icon.className = "ytml-icon";
+    icon.alt = "";
+    icon.setAttribute("aria-hidden", "true");
+    icon.src = MARK_URL;
+    play.appendChild(icon);
+
+    const suggest = document.createElement("div");
+    suggest.className = "ytml-suggest";
+    suggest.hidden = true;
+
+    bar.append(chips, input, play, suggest);
+
+    input.addEventListener("focus", () => {
+      loadArtistIndex();
+      renderSuggestions();
+    });
+    input.addEventListener("input", () => {
+      loadArtistIndex();
+      renderSuggestions();
+    });
+    input.addEventListener("keydown", onArtistInputKey);
+    // Keep typing/navigation keys from triggering YT Music's single-key hotkeys.
+    for (const t of ["keydown", "keyup", "keypress"]) {
+      input.addEventListener(t, (e) => e.stopPropagation());
+    }
+    play.addEventListener("click", onArtistBarPlay);
+
+    return bar;
+  }
+
+  // Build the artist index once (lazily, on first focus/type). Reuses the same
+  // cache-or-fetch path as the header button, so a warm cache makes it instant.
+  function loadArtistIndex() {
+    if (artistIndex) return Promise.resolve(artistIndex);
+    if (artistIndexPromise) return artistIndexPromise;
+    artistIndexPromise = (async () => {
+      const cfg = await getConfig();
+      const songs = await getLikedSongs(cfg);
+      artistIndex = buildArtistIndex(songs);
+      console.log(
+        TAG,
+        `artist index: ${artistIndex.length} artists from ${songs.length} liked songs`
+      );
+      const els = barEls();
+      if (els && document.activeElement === els.input) renderSuggestions();
+      return artistIndex;
+    })().catch((e) => {
+      console.debug(TAG, "artist index load failed", e);
+      artistIndexPromise = null; // allow a retry on the next focus/type
+      return null;
+    });
+    return artistIndexPromise;
+  }
+
+  // Rank matches: name-prefix hits first, then substring hits, excluding
+  // already-selected artists. Names in each group are pre-normalized.
+  function matchArtists(query) {
+    if (!artistIndex) return [];
+    const q = norm(query);
+    const pool = artistIndex.filter((g) => !selected.includes(g));
+    if (!q) return pool.slice(0, MAX_SUGGEST);
+    const prefix = [];
+    const substr = [];
+    for (const g of pool) {
+      let best = 0; // 2 = a name starts with q, 1 = a name contains q
+      for (const n of g.names) {
+        if (n.startsWith(q)) { best = 2; break; }
+        if (n.includes(q)) best = 1;
+      }
+      if (best === 2) prefix.push(g);
+      else if (best === 1) substr.push(g);
+    }
+    return prefix.concat(substr).slice(0, MAX_SUGGEST);
+  }
+
+  function renderSuggestions() {
+    const els = barEls();
+    if (!els) return;
+    const { input, suggest } = els;
+    activeSuggest = -1;
+    suggest.innerHTML = "";
+    positionSuggest(els);
+
+    if (!artistIndex) {
+      suggest.appendChild(suggestMessage("Loading your liked artists…"));
+      suggest.hidden = false;
+      return;
+    }
+
+    const matches = matchArtists(input.value);
+    suggest._matches = matches;
+    if (!matches.length) {
+      const msg = norm(input.value) ? "No matching liked artist" : "No liked artists found";
+      suggest.appendChild(suggestMessage(msg));
+      suggest.hidden = false;
+      return;
+    }
+
+    for (const g of matches) {
+      const item = document.createElement("div");
+      item.className = "ytml-suggest-item";
+      item.setAttribute("role", "option");
+      const name = document.createElement("span");
+      name.className = "ytml-suggest-name";
+      name.textContent = g.display;
+      const count = document.createElement("span");
+      count.className = "ytml-suggest-count";
+      count.textContent = String(g.count);
+      item.append(name, count);
+      // mousedown (not click) so it fires before the input's blur.
+      item.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        addArtist(g);
+      });
+      suggest.appendChild(item);
+    }
+    suggest.hidden = false;
+  }
+
+  function suggestMessage(text) {
+    const el = document.createElement("div");
+    el.className = "ytml-suggest-empty";
+    el.textContent = text;
+    return el;
+  }
+
+  // Fixed-position the dropdown under the bar so no ancestor overflow clips it.
+  function positionSuggest(els) {
+    const r = els.bar.getBoundingClientRect();
+    const s = els.suggest.style;
+    s.top = `${Math.round(r.bottom + 6)}px`;
+    s.left = `${Math.round(r.left)}px`;
+    s.width = `${Math.round(Math.max(r.width, 260))}px`;
+  }
+
+  function hideSuggestions() {
+    const els = barEls();
+    if (!els) return;
+    els.suggest.hidden = true;
+    els.suggest.innerHTML = "";
+    activeSuggest = -1;
+  }
+
+  function onArtistInputKey(e) {
+    const els = barEls();
+    if (!els) return;
+    const { input, suggest } = els;
+    const items = suggest.hidden
+      ? []
+      : [...suggest.querySelectorAll(".ytml-suggest-item")];
+
+    if (e.key === "ArrowDown" && items.length) {
+      e.preventDefault();
+      activeSuggest = (activeSuggest + 1) % items.length;
+      highlightSuggest(items);
+    } else if (e.key === "ArrowUp" && items.length) {
+      e.preventDefault();
+      activeSuggest = (activeSuggest - 1 + items.length) % items.length;
+      highlightSuggest(items);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const matches = (suggest.hidden ? [] : suggest._matches) || [];
+      if (activeSuggest >= 0 && matches[activeSuggest]) addArtist(matches[activeSuggest]);
+      else if (input.value.trim() && matches.length) addArtist(matches[0]);
+      else if (selected.length) onArtistBarPlay();
+    } else if (e.key === "Backspace" && !input.value && selected.length) {
+      removeArtist(selected[selected.length - 1]);
+    } else if (e.key === "Escape") {
+      hideSuggestions();
+      input.blur();
+    }
+  }
+
+  function highlightSuggest(items) {
+    items.forEach((el, i) => el.classList.toggle("ytml-suggest-active", i === activeSuggest));
+    if (items[activeSuggest]) items[activeSuggest].scrollIntoView({ block: "nearest" });
+  }
+
+  function addArtist(group) {
+    if (!group || selected.includes(group)) return;
+    selected.push(group);
+    renderChips();
+    const els = barEls();
+    if (els) {
+      els.input.value = "";
+      els.input.focus();
+    }
+    renderSuggestions(); // refresh list (drops the just-added artist)
+  }
+
+  function removeArtist(group) {
+    const i = selected.indexOf(group);
+    if (i >= 0) selected.splice(i, 1);
+    renderChips();
+  }
+
+  function clearArtists() {
+    selected.length = 0;
+    renderChips();
+    const els = barEls();
+    if (els) els.input.value = "";
+  }
+
+  function renderChips() {
+    const els = barEls();
+    if (!els) return;
+    const { chips, play } = els;
+    chips.innerHTML = "";
+    for (const g of selected) {
+      const chip = document.createElement("span");
+      chip.className = "ytml-chip";
+      const label = document.createElement("span");
+      label.className = "ytml-chip-label";
+      label.textContent = g.display;
+      const x = document.createElement("button");
+      x.type = "button";
+      x.className = "ytml-chip-x";
+      x.setAttribute("aria-label", `Remove ${g.display}`);
+      x.textContent = "×";
+      x.addEventListener("click", () => removeArtist(g));
+      chip.append(label, x);
+      chips.appendChild(chip);
+    }
+    play.disabled = running || selected.length === 0;
+  }
+
+  async function onArtistBarPlay() {
+    if (running || !selected.length) return;
+    running = true;
+    setArtistBarBusy(true);
+    hideSuggestions();
+    try {
+      const cfg = await getConfig();
+      const all = await getLikedSongs(cfg);
+
+      // Union the selected artists into one identity, then reuse the same
+      // predicate the header button uses.
+      const identity = { channelIds: new Set(), names: new Set() };
+      for (const g of selected) {
+        for (const id of g.ids) identity.channelIds.add(id);
+        for (const n of g.names) identity.names.add(n);
+      }
+      const picked = selected.map((g) => g.display).join(", ");
+      const matches = filterByArtist(all, identity);
+      console.log(TAG, `artist bar: ${matches.length} liked songs by [${picked}]`);
+      if (!matches.length) {
+        toast(`No liked songs found for ${picked}.`);
+        return;
+      }
+
+      // Reset the selection as playback starts (per requirement). Done before
+      // navigating: the reload clears it anyway, but a slow or same-document
+      // navigation shouldn't leave stale chips behind. matches is already
+      // captured, so clearing `selected` first is safe.
+      clearArtists();
+      await playShuffled(matches);
+    } catch (err) {
+      console.error(TAG, err);
+      toast(`Couldn't start playback: ${err.message}`);
+    } finally {
+      running = false;
+      setArtistBarBusy(false);
+    }
+  }
+
+  function setArtistBarBusy(busy) {
+    const els = barEls();
+    if (!els) return;
+    els.play.classList.toggle("ytml-busy", busy);
+    els.play.disabled = busy || selected.length === 0;
+    els.input.disabled = busy;
+  }
+
+  // Close the dropdown on an outside click, and keep it aligned on resize.
+  // Registered once (not per bar build) to avoid piling up listeners.
+  document.addEventListener(
+    "mousedown",
+    (e) => {
+      const bar = document.getElementById(ARTIST_BAR_ID);
+      if (bar && !bar.contains(e.target)) hideSuggestions();
+    },
+    true
+  );
+  window.addEventListener("resize", () => {
+    const els = barEls();
+    if (els && !els.suggest.hidden) positionSuggest(els);
+  });
 
   // --------------------------------------------------------------------------
   // Small helpers
